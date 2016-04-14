@@ -149,7 +149,7 @@ Unit(),
 lootForPickPocketed(false), lootForBody(false), m_lootMoney(0), m_lootRecipient(0),
 m_corpseRemoveTime(0), m_respawnTime(0), m_respawnDelay(25), m_corpseDelay(60), m_respawnradius(0.0f),
 m_emoteState(0), m_reactState(REACT_AGGRESSIVE),
-m_regenTimer(2000), m_defaultMovementType(IDLE_MOTION_TYPE), m_equipmentId(0), m_AlreadyCallAssistance(false),
+m_regenTimer(2000), m_deathDelayTimer(0), m_defaultMovementType(IDLE_MOTION_TYPE), m_equipmentId(0), m_AlreadyCallAssistance(false),
 m_regenHealth(true), m_AI_locked(false), m_isDeadByDefault(false),
 m_meleeDamageSchoolMask(SPELL_SCHOOL_MASK_NORMAL), m_creatureInfo(NULL), m_DBTableGuid(0), m_formation(NULL), m_PlayerDamageReq(0), m_summonMask(SUMMON_MASK_NONE)
 , m_AlreadySearchedAssistance(false)
@@ -468,6 +468,18 @@ void Creature::Update(uint32 diff)
     else
         m_GlobalCooldown -= diff;
 
+    // Handle delayed creature death
+    if (m_deathDelayTimer)
+    {
+        if (m_deathDelayTimer <= diff)
+        {
+            m_deathDelayTimer = 0;
+            SetHealth(0);
+        }
+        else
+            m_deathDelayTimer -= diff;
+    }
+
     switch (m_deathState)
     {
         case JUST_ALIVED:
@@ -575,6 +587,7 @@ void Creature::Update(uint32 diff)
             // CORPSE/DEAD state will processed at next tick (in other case death timer will be updated unexpectedly)
             if (!isAlive())
                 break;
+
             if (m_regenTimer > 0)
             {
                 if (diff >= m_regenTimer)
@@ -2263,5 +2276,14 @@ time_t Creature::GetLinkedCreatureRespawnTime() const
     }
 
     return 0;
+}
+
+void Creature::HandleDelayedDeath(uint32 deathDelay)
+{
+    SetHealth(1);
+
+    // only set deathDelayTimer if we don't have already one set
+    if (!m_deathDelayTimer)
+        m_deathDelayTimer = deathDelay;
 }
 

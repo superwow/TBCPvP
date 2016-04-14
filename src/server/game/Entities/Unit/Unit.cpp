@@ -242,6 +242,8 @@ Unit::Unit()
     m_modAttackSpeedPct[BASE_ATTACK] = 1.0f;
     m_modAttackSpeedPct[OFF_ATTACK] = 1.0f;
     m_modAttackSpeedPct[RANGED_ATTACK] = 1.0f;
+    m_modCastingSpeedPctPositive = 1.0f;
+    m_modCastingSpeedPctNegative = 1.0f;
 
     m_extraAttacks = 0;
     m_canDualWield = false;
@@ -300,6 +302,7 @@ Unit::Unit()
 
     m_CombatTimer = 0;
     m_lastManaUse = 0;
+    m_visibilityUpdateTimer = 0;
 
     //m_victimThreat = 0.0f;
     for (uint8 i = 0; i < MAX_SPELL_SCHOOL; ++i)
@@ -374,6 +377,21 @@ void Unit::Update(uint32 p_time)
             else
                 m_CombatTimer -= p_time;
         }
+    }
+
+    // update visibility notify timer
+    if (m_visibilityUpdateTimer > 0)
+    {
+        if (p_time >= m_visibilityUpdateTimer)
+        {
+            if (m_Visibility == VISIBILITY_GROUP_STEALTH)
+                DestroyForNearbyPlayers(true);
+
+            UpdateObjectVisibility();
+            m_visibilityUpdateTimer = 0;
+        }
+        else
+            m_visibilityUpdateTimer -= p_time;
     }
 
     //not implemented before 3.0.2
@@ -2603,24 +2621,27 @@ float Unit::MeleeSpellMissChance(const Unit *pVictim, WeaponAttackType attType, 
     return miss_chance;
 }
 
-int32 Unit::GetMechanicResistChance(const SpellEntry *spell)
+int32 Unit::GetMechanicResistChance(SpellEntry const* spellInfo) const
 {
-    if (!spell)
+    if (!spellInfo)
         return 0;
-    int32 resist_mech = 0;
+
+    int32 resistMech = 0;
     for (uint8 eff = 0; eff < MAX_SPELL_EFFECTS; ++eff)
     {
-        if (spell->Effect[eff] == 0)
+        if (spellInfo->Effect[eff] == 0)
            break;
-        int32 effect_mech = GetEffectMechanic(spell, eff);
-        if (effect_mech)
+
+        int32 effectMech = GetEffectMechanic(spellInfo, eff);
+        if (effectMech)
         {
-            int32 temp = GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_MECHANIC_RESISTANCE, effect_mech);
-            if (resist_mech < temp)
-                resist_mech = temp;
+            int32 temp = GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_MECHANIC_RESISTANCE, effectMech);
+            if (resistMech < temp)
+                resistMech = temp;
         }
     }
-    return resist_mech;
+
+    return resistMech;
 }
 
 // Melee based spells hit result calculations
@@ -2665,15 +2686,6 @@ SpellMissInfo Unit::MeleeSpellHitResult(Unit *pVictim, SpellEntry const *spell, 
         tmp += missChance;
         if (roll < tmp)
             return SPELL_MISS_MISS;
-    }
-
-    if (canResist)
-    {
-        // Chance resist mechanic
-        int32 resist_chance = pVictim->GetMechanicResistChance(spell)*100;
-        tmp += resist_chance;
-        if (roll < tmp)
-            return SPELL_MISS_RESIST;
     }
 
     // Same spells cannot be parry/dodge
@@ -2802,8 +2814,6 @@ SpellMissInfo Unit::MagicSpellHitResult(Unit *pVictim, SpellEntry const *spell)
         modHitChance-=pVictim->GetTotalAuraModifier(SPELL_AURA_MOD_DISPEL_RESIST);
     // Chance resist debuff
     modHitChance -= pVictim->GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_DEBUFF_RESISTANCE, int32(spell->Dispel));
-    // Chance resist mechanic (select max value from every mechanic spell effect)
-    modHitChance -= pVictim->GetMechanicResistChance(spell);
 
     int32 HitChance = modHitChance * 100;
     // Increase hit chance from attacker SPELL_AURA_MOD_SPELL_HIT_CHANCE and attacker ratings
@@ -3683,17 +3693,7 @@ bool Unit::AddAura(Aura *Aur)
     }
 
     SpellEntry const* aurSpellInfo = Aur->GetSpellProto();
-
     spellEffectPair spair = spellEffectPair(Aur->GetId(), Aur->GetEffIndex());
-
-    if (this->HasAura(1044,0))
-    {
-        for (uint8 i = 0 ; i < MAX_SPELL_EFFECTS; ++i)
-        {
-            if (IsImmunedToSpellEffect(aurSpellInfo, i))
-                return false;
-        }
-    }
 
     bool stackModified=false;
     // passive and persistent auras can stack with themselves any number of times
@@ -9052,7 +9052,10 @@ void Unit::CombatStart(Unit* target, bool initialAggro, uint32 spellId)
             if (plrTarget->GetCombatImmuneTime())
                 return;
         }
-        target->SetInCombatWith(this);
+
+        // Don't set target in combat when isolated
+        if (!target->hasUnitState(UNIT_STAT_ISOLATED))
+            target->SetInCombatWith(this);
     }
     Unit *who = target->GetCharmerOrOwnerOrSelf();
     if (who->GetTypeId() == TYPEID_PLAYER)
@@ -9288,16 +9291,16 @@ void Unit::ModSpellCastTime(SpellEntry const* spellProto, int32 & castTime, Spel
 {
     if (!spellProto || castTime<0)
         return;
+
     //called from caster
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellProto->Id, SPELLMOD_CASTING_TIME, castTime, spell);
 
-    if (spellProto->Attributes & SPELL_ATTR_RANGED && !(spellProto->AttributesEx2 & SPELL_ATTR_EX2_AUTOREPEAT_FLAG))
+    if (!((spellProto->Attributes & (SPELL_ATTR_ABILITY | SPELL_ATTR_TRADESPELL)) || (spellProto->AttributesEx3 & SPELL_ATTR_EX3_NO_SPELL_BONUS)) &&
+        ((GetTypeId() == TYPEID_PLAYER && spellProto->SpellFamilyName) || GetTypeId() == TYPEID_UNIT))
+        castTime = int32(float(castTime) * GetFloatValue(UNIT_MOD_CAST_SPEED));
+    else if (spellProto->Attributes & SPELL_ATTR_RANGED && !(spellProto->AttributesEx2 & SPELL_ATTR_EX2_AUTOREPEAT_FLAG))
         castTime = int32 (float(castTime) * m_modAttackSpeedPct[RANGED_ATTACK]);
-    else // TODO: fix it
-        if (spellProto->SpellFamilyName) // some magic spells doesn't have dmgType == SPELL_DAMAGE_CLASS_MAGIC (arcane missiles/evocation)
-            castTime = int32(float(castTime) * GetFloatValue(UNIT_MOD_CAST_SPEED));
-
 }
 
 int32 Unit::ModifyPower(Powers power, int32 dVal)
@@ -9425,14 +9428,18 @@ bool Unit::canDetectStealthOf(Unit const* target, float distance) const
     return distance < visibleDistance;
 }
 
-void Unit::SetVisibility(UnitVisibility x)
+void Unit::SetVisibility(UnitVisibility x, uint32 updateDelay)
 {
     m_Visibility = x;
 
-    if (m_Visibility == VISIBILITY_GROUP_STEALTH)
-        DestroyForNearbyPlayers(true);
-
-    UpdateObjectVisibility();
+    if (!updateDelay)
+    {
+        if (m_Visibility == VISIBILITY_GROUP_STEALTH)
+            DestroyForNearbyPlayers(true);
+        UpdateObjectVisibility();
+    }
+    else
+        SetVisibilityUpdateTimer(updateDelay);
 }
 
 void Unit::UpdateSpeed(UnitMoveType mtype, bool forced, float ratio)
@@ -9715,7 +9722,8 @@ void Unit::setDeathState(DeathState s)
         GetMotionMaster()->MoveIdle();
         //without this when removing IncreaseMaxHealth aura player may stuck with 1 hp
         //do not why since in IncreaseMaxHealth currenthealth is checked
-        SetHealth(0);
+        if (GetTypeId() != TYPEID_UNIT) // Creature case will be handeled by m_deathDelayTimer
+            SetHealth(0);
     }
     else if (s == JUST_ALIVED)
         RemoveFlag (UNIT_FIELD_FLAGS, UNIT_FLAG_SKINNABLE); // clear skinnable for creature and player (at battleground)
@@ -10119,7 +10127,7 @@ void Unit::ApplyDiminishingToDuration(DiminishingGroup group, int32 &duration, U
     if (duration == -1 || group == DIMINISHING_NONE)/*(caster->IsFriendlyTo(this) && caster != this)*/
         return;
 
-        // test pet/charm masters instead pets/charmedsz
+    // test pet/charm masters instead pets/charmedsz
     Unit const* targetOwner = GetCharmerOrOwner();
     Unit const* casterOwner = caster->GetCharmerOrOwner();
 
@@ -11769,13 +11777,14 @@ void Unit::ApplyAttackTimePercentMod(WeaponAttackType att, float val, bool apply
 void Unit::ApplyCastTimePercentMod(float val, bool apply)
 {
     if (val > 0)
+    {
         ApplyPercentModFloatValue(UNIT_MOD_CAST_SPEED, val, !apply);
+        ApplyPercentModFloatVar(m_modCastingSpeedPctPositive, val, !apply);
+    }
     else
     {
-        if (getLevel() < 73) // bosses never suffer cast speed slows
-        {
-           ApplyPercentModFloatValue(UNIT_MOD_CAST_SPEED, -val, apply);
-        }
+        ApplyPercentModFloatValue(UNIT_MOD_CAST_SPEED, -val, apply);
+        ApplyPercentModFloatVar(m_modCastingSpeedPctNegative, -val, apply);
     }
 }
 
@@ -12161,7 +12170,10 @@ void Unit::Kill(Unit *pVictim, bool durabilityLoss)
     if (!pVictim->GetHealth())
         return;
 
-    pVictim->SetHealth(0);
+    if (pVictim->GetTypeId() == TYPEID_UNIT)
+        pVictim->ToCreature()->HandleDelayedDeath(CREATURE_DEATH_DELAY);
+    else
+        pVictim->SetHealth(0);
 
     // find player: owner of controlled `this` or `this` itself maybe
     Player* player = GetCharmerOrOwnerPlayerOrPlayerItself();
@@ -12846,19 +12858,8 @@ void Unit::AddAura(uint32 spellId, Unit* target)
     {
         if (spellInfo->Effect[i] == SPELL_EFFECT_APPLY_AURA)
         {
-            if (target->IsImmunedToSpellEffect(spellInfo, i))
-                continue;
-
-            /*if (spellInfo->EffectImplicitTargetA[i] == TARGET_UNIT_CASTER)
-            {
-                Aura *Aur = CreateAura(spellInfo, i, NULL, this, this);
-                AddAura(Aur);
-            }
-            else*/
-            {
-                Aura *Aur = CreateAura(spellInfo, i, NULL, target, this);
-                target->AddAura(Aur);
-            }
+            Aura *Aur = CreateAura(spellInfo, i, NULL, target, this);
+            target->AddAura(Aur);
         }
     }
 }
@@ -12945,6 +12946,9 @@ void Unit::SendHealthUpdateDueToCharm(Player* charmer)
 
 Unit* Unit::GetMeleeHitRedirectTarget(Unit* victim, SpellEntry const* spellInfo)
 {
+    if ((spellInfo && spellInfo->AttributesEx & (SPELL_ATTR_EX_CANT_BE_REDIRECTED | SPELL_ATTR_EX_CANT_BE_REFLECTED)) == 0)
+        return victim;
+
     float maxRange = NOMINAL_MELEE_RANGE;
     if (spellInfo && spellInfo->rangeIndex)
         maxRange = GetSpellMaxRange(sSpellRangeStore.LookupEntry(spellInfo->rangeIndex));

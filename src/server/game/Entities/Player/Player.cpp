@@ -736,7 +736,6 @@ Player::Player (WorldSession *session): Unit()
     m_comboTarget = 0;
     m_comboPoints = 0;
 
-    m_visibilityUpdateTimer = 0;
     m_combatImmuneTimer = 0;
 
     m_usedTalentCount = 0;
@@ -1733,17 +1732,6 @@ void Player::Update(uint32 p_time)
         }
         else
             m_zoneUpdateTimer -= p_time;
-    }
-
-    if (m_visibilityUpdateTimer > 0)
-    {
-        if (p_time >= m_visibilityUpdateTimer)
-        {
-            SetVisibility(VISIBILITY_GROUP_STEALTH);
-            m_visibilityUpdateTimer = 0;
-        }
-        else
-            m_visibilityUpdateTimer -= p_time;
     }
 
     if (m_combatImmuneTimer > 0)
@@ -21927,7 +21915,7 @@ void Player::AddGlobalCooldown(SpellEntry const *spellInfo, Spell const *spell)
         return;
 
     if (!(spellInfo->Attributes & (SPELL_ATTR_ABILITY | SPELL_ATTR_TRADESPELL)))
-        cdTime = int32(float(cdTime) * GetFloatValue(UNIT_MOD_CAST_SPEED));
+        cdTime = int32(float(cdTime) * m_modCastingSpeedPctPositive);
     else if (spell->IsRangedSpell() && !spell->IsAutoRepeat())
         cdTime = int32(float(cdTime) * m_modAttackSpeedPct[RANGED_ATTACK]);
 

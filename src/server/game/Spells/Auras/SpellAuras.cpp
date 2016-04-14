@@ -614,10 +614,6 @@ void Aura::Update(uint32 diff)
                 PeriodicTick();
         }
     }
-
-    // remove auras on immunity at each tick
-    if (GetSpellProto()->AttributesEx & SPELL_ATTR_EX_DISPEL_AURAS_ON_IMMUNITY)
-        m_target->RemoveAurasWithDispelType(DispelType(m_modifier.m_miscvalue));
 }
 
 bool AreaAura::CheckTarget(Unit *target)
@@ -3365,14 +3361,11 @@ void Aura::HandleModStealth(bool apply, bool Real)
             // apply only if not in GM invisibility (and overwrite invisibility state)
             if (m_target->GetVisibility() != VISIBILITY_OFF)
             {
-                if (Player* plrTarget = m_target->ToPlayer())
-                {
-                    // Don't add delayed invisiblity update for nightelf racial (Shadowmelt)
-                    if (GetId() == 20580)
-                        plrTarget->SetVisibility(VISIBILITY_GROUP_STEALTH);
-                    else
-                        plrTarget->SetVisibilityUpdateTimer(250);
-                }
+                // Don't add delayed invisiblity update for nightelf racial (Shadowmelt)
+                if (m_spellProto->Id == 20580)
+                    m_target->SetVisibility(VISIBILITY_GROUP_STEALTH);
+                else
+                    m_target->SetVisibility(VISIBILITY_GROUP_STEALTH, UPDATE_DELAY_VISIBILITY_DELAYED);
             }
 
             // for RACE_NIGHTELF stealth
@@ -3385,9 +3378,6 @@ void Aura::HandleModStealth(bool apply, bool Real)
         // only at real aura remove
         if (Real)
         {
-            if (Player* plrTarget = m_target->ToPlayer())
-                plrTarget->SetVisibilityUpdateTimer(0);
-
             // for RACE_NIGHTELF stealth
             if (m_target->GetTypeId() == TYPEID_PLAYER && GetId() == 20580)
                 m_target->RemoveAurasDueToSpell(21009);
@@ -3399,11 +3389,7 @@ void Aura::HandleModStealth(bool apply, bool Real)
                 if (m_target->GetTypeId() == TYPEID_PLAYER)
                     m_target->RemoveByteFlag(PLAYER_FIELD_BYTES2, 3, PLAYER_FIELD_BYTE2_STEALTH);
 
-                // restore invisibility if any
-                if (m_target->HasAuraType(SPELL_AURA_MOD_INVISIBILITY))
-                    m_target->SetVisibility(VISIBILITY_ON);
-                else
-                    m_target->SetVisibility(VISIBILITY_ON);
+                m_target->SetVisibility(VISIBILITY_ON, UPDATE_DELAY_VISIBILITY_DELAYED);
             }
         }
     }

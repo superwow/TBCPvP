@@ -1090,10 +1090,6 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
         // Fill base damage struct (unitTarget - is real spell target)
         SpellNonMeleeDamage damageInfo(caster, unitTarget, m_spellInfo->Id, m_spellSchoolMask);
 
-        // Start combat
-        if (!m_caster->IsFriendlyTo(unit) && !IsPositiveSpell(m_spellInfo->Id) && IsAggressiveSpell(m_spellInfo, m_IsTriggeredSpell))
-            m_caster->CombatStart(unit, !(m_spellInfo->AttributesEx3 & SPELL_ATTR_EX3_NO_INITIAL_AGGRO), m_spellInfo->Id);
-
         caster->CalculateSpellDamageTaken(&damageInfo, m_damage, m_spellInfo, m_attackType);
 
         // Send log damage message to client
@@ -1234,6 +1230,10 @@ SpellMissInfo Spell::DoSpellHitOnUnit(Unit *unit, const uint32 effectMask)
                 }
             }
 
+            // Start combat
+            if (!IsPositiveSpell(m_spellInfo->Id) && IsAggressiveSpell(m_spellInfo, m_IsTriggeredSpell))
+                m_caster->CombatStart(unit, !(m_spellInfo->AttributesEx3 & SPELL_ATTR_EX3_NO_INITIAL_AGGRO), m_spellInfo->Id);
+
             // Distract should not remove vanish
             if (m_spellInfo->Id != 1725)
                 unit->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HITBYSPELL);
@@ -1276,10 +1276,16 @@ SpellMissInfo Spell::DoSpellHitOnUnit(Unit *unit, const uint32 effectMask)
             return SPELL_MISS_IMMUNE;
         }
 
+        uint8 aura_effmask = 0;
+        for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+            if (effectMask & (1 << i) && IsUnitOwnedAuraEffect(m_spellInfo->Effect[i]))
+                aura_effmask |= 1 << i;
+
         DiminishingReturnsType type = GetDiminishingReturnsGroupType(m_diminishGroup);
         // Increase Diminishing on unit, current informations for actually casts will use values above
-        if ((type == DRTYPE_PLAYER && (unit->GetTypeId() == TYPEID_PLAYER || unit->ToCreature()->isPet() || unit->ToCreature()->isPossessedByPlayer())) || type == DRTYPE_ALL)
-            unit->IncrDiminishing(m_diminishGroup);
+        if (m_diminishGroup && aura_effmask)
+            if ((type == DRTYPE_PLAYER && (unit->GetTypeId() == TYPEID_PLAYER || unit->ToCreature()->isPet() || unit->ToCreature()->isPossessedByPlayer())) || type == DRTYPE_ALL)
+                unit->IncrDiminishing(m_diminishGroup);
     }
 
     for (uint32 effectNumber = 0; effectNumber < 3; effectNumber++)
@@ -1673,9 +1679,6 @@ void Spell::SetTargetMap(uint32 i, uint32 cur)
 
             switch (cur)
             {
-                case TARGET_UNIT_TARGET_ENEMY:
-                    if (((m_spellInfo->AttributesEx & (0x8 | 0x80)) == 0 ) || (m_spellInfo->SpellIconID == 225 && m_spellInfo->SpellVisual == 262))
-                        AddUnitTarget(m_caster->GetMeleeHitRedirectTarget(target, m_spellInfo), i);
                 case TARGET_UNIT_CHAINHEAL:
                     pushType = PUSH_CHAIN;
                     break;
@@ -1685,8 +1688,12 @@ void Spell::SetTargetMap(uint32 i, uint32 cur)
                 case TARGET_UNIT_MINIPET:
                     AddUnitTarget(target, i);
                     break;
-                case TARGET_UNIT_TARGET_ANY: // SelectMagnetTarget()?
-                    AddUnitTarget(SelectMagnetTarget(), i);
+                case TARGET_UNIT_TARGET_ANY:
+                case TARGET_UNIT_TARGET_ENEMY:
+                    if (m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_RANGED)
+                        AddUnitTarget(m_caster->GetMeleeHitRedirectTarget(target, m_spellInfo), i);
+                    else if (m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MAGIC)
+                        AddUnitTarget(SelectMagnetTarget(), i);
                     break;
                 case TARGET_UNIT_PARTY_TARGET:
                 case TARGET_UNIT_CLASS_TARGET:
