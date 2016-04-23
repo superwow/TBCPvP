@@ -838,8 +838,7 @@ void Spell::AddUnitTarget(Unit* pVictim, uint32 effIndex)
     // Calculate hit result
     if (m_originalCaster)
     {
-        bool canMiss = (m_triggeredByAuraSpell || !m_IsTriggeredSpell || m_spellInfo->Id == 75);
-        target.missCondition = m_originalCaster->SpellHitResult(pVictim, m_spellInfo, m_canReflect, canMiss);
+        target.missCondition = m_originalCaster->SpellHitResult(pVictim, m_spellInfo, m_canReflect);
         if (m_skipCheck && target.missCondition != SPELL_MISS_IMMUNE)
             target.missCondition = SPELL_MISS_NONE;
     }
@@ -1057,7 +1056,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
 
     // All calculated do it!
     // Do healing and triggers
-    if (m_healing > 0)
+    if (m_healing)
     {
         bool crit = caster->isSpellCrit(unitTarget, m_spellInfo, m_spellSchoolMask);
         procEx |= PROC_EX_HEALING; // Healing Proc
@@ -1085,12 +1084,12 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
                 bg->UpdatePlayerScore(caster->ToPlayer(), SCORE_HEALING_DONE, gain);
     }
     // Do damage and triggers
-    else if (m_damage > 0)
+    else if (m_damage)
     {
         // Fill base damage struct (unitTarget - is real spell target)
         SpellNonMeleeDamage damageInfo(caster, unitTarget, m_spellInfo->Id, m_spellSchoolMask);
 
-        caster->CalculateSpellDamageTaken(&damageInfo, m_damage, m_spellInfo, m_attackType);
+        caster->CalculateSpellDamage(&damageInfo, m_damage, m_spellInfo, m_attackType);
 
         // Send log damage message to client
         caster->SendSpellNonMeleeDamageLog(&damageInfo);
@@ -1694,6 +1693,8 @@ void Spell::SetTargetMap(uint32 i, uint32 cur)
                         AddUnitTarget(m_caster->GetMeleeHitRedirectTarget(target, m_spellInfo), i);
                     else if (m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MAGIC)
                         AddUnitTarget(SelectMagnetTarget(), i);
+                    else
+                        AddUnitTarget(target, i);
                     break;
                 case TARGET_UNIT_PARTY_TARGET:
                 case TARGET_UNIT_CLASS_TARGET:
@@ -2273,10 +2274,10 @@ void Spell::prepare(SpellCastTargets * targets, Aura* triggeredByAura)
         SendSpellStart();
 
         if (m_caster->GetTypeId() == TYPEID_PLAYER)
+        {
             m_caster->ToPlayer()->AddGlobalCooldown(m_spellInfo, this);
 
-        if (m_caster->GetTypeId() == TYPEID_PLAYER)
-        {
+            // Send addon server side messages
             int32 castTime = 0;
             castTime =  IsChanneledSpell(m_spellInfo) ? -(GetSpellDuration(m_spellInfo)) : m_casttime;
 
@@ -2286,9 +2287,9 @@ void Spell::prepare(SpellCastTargets * targets, Aura* triggeredByAura)
             if (m_spellInfo->Id == 42292)
                 m_caster->ToPlayer()->SendGladdyNotification();
         }
-        if (!m_casttime && !m_spellInfo->StartRecoveryTime
-            && !m_castItemGUID     //item: first cast may destroy item and second cast causes crash
-            && GetCurrentContainer() == CURRENT_GENERIC_SPELL)
+
+        // item: first cast may destroy item and second cast causes crash
+        if (!m_casttime && !m_spellInfo->StartRecoveryTime && !m_castItemGUID && GetCurrentContainer() == CURRENT_GENERIC_SPELL)
             cast(true);
     }
 }
@@ -2356,8 +2357,12 @@ void Spell::cancel()
 
             m_caster->RemoveAurasByCasterSpell(m_spellInfo->Id, m_caster->GetGUID());
             SendChannelUpdate(0);
-            SendInterrupted(0);
-            SendCastResult(SPELL_FAILED_INTERRUPTED);
+
+            if (!IsChanneledSpell(m_spellInfo))
+            {
+                SendInterrupted(0);
+                SendCastResult(SPELL_FAILED_INTERRUPTED);
+            }
 
             // spell is canceled-take mods and clear list
             if (m_caster->GetTypeId() == TYPEID_PLAYER)
@@ -2499,8 +2504,7 @@ void Spell::cast(bool skipCheck)
     //SendCastResult(castResult);
     SendSpellGo();                                          // we must send smsg_spell_go packet before m_castItem delete in TakeCastItem()...
 
-    //handle SPELL_AURA_ADD_TARGET_TRIGGER auras
-    //are there any spells need to be triggered after hit?
+    // handle SPELL_AURA_ADD_TARGET_TRIGGER auras
     Unit::AuraList const& targetTriggers = m_caster->GetAurasByType(SPELL_AURA_ADD_TARGET_TRIGGER);
     for (Unit::AuraList::const_iterator i = targetTriggers.begin(); i != targetTriggers.end(); ++i)
     {
@@ -2511,7 +2515,8 @@ void Spell::cast(bool skipCheck)
             if (SpellEntry const *spellInfo = sSpellStore.LookupEntry(auraSpellInfo->EffectTriggerSpell[auraSpellIdx]))
             {
                 // Calculate chance at that moment (can be depend for example from combo points)
-                int32 chance = m_caster->CalculateSpellDamage(nullptr, auraSpellInfo, auraSpellIdx, (*i)->GetBasePoints());
+                int32 auraBasePoints = (*i)->GetBasePoints();
+                int32 chance = m_caster->CalculateSpellDamage(nullptr, auraSpellInfo, auraSpellIdx, &auraBasePoints);
                 m_ChanceTriggerSpells.push_back(std::make_pair(spellInfo, chance * (*i)->GetStackAmount()));
             }
         }
@@ -3386,9 +3391,6 @@ void Spell::SendChannelUpdate(uint32 time)
         m_caster->SetUInt32Value(UNIT_CHANNEL_SPELL, 0);
     }
 
-    if (m_caster->GetTypeId() != TYPEID_PLAYER)
-        return;
-
     WorldPacket data(MSG_CHANNEL_UPDATE, 8+4);
     data << m_caster->GetPackGUID();
     data << uint32(time);
@@ -3679,7 +3681,7 @@ void Spell::HandleEffects(Unit *pUnitTarget, Item *pItemTarget, GameObject *pGOT
     sLog->outDebug("Spell: Effect : %u", eff);
 
     //we do not need DamageMultiplier here.
-    damage = CalculateDamage(i, NULL);
+    damage = int32(m_caster->CalculateSpellDamage(unitTarget, m_spellInfo, i, &m_currentBasePoints[i]));
 
     if (eff<TOTAL_SPELL_EFFECTS)
     {
@@ -4015,6 +4017,21 @@ uint8 Spell::CanCast(bool strict)
 
                     if (m_targets.getUnitTarget()->GetHealth() > m_targets.getUnitTarget()->GetMaxHealth()*0.2)
                         return SPELL_FAILED_BAD_TARGETS;
+                }
+                break;
+            }
+            case SPELL_EFFECT_APPLY_AURA:
+            {
+                switch (m_spellInfo->EffectApplyAuraName[i])
+                {
+                    case SPELL_AURA_BIND_SIGHT:
+                    {
+                        // Cannot bind sight across instances / continents.
+                        // Does not affect the same instance / continent, no matter the range.
+                        if (target == m_caster)
+                            return SPELL_FAILED_BAD_TARGETS;
+                        break;
+                    }
                 }
                 break;
             }
@@ -4584,8 +4601,8 @@ uint8 Spell::CanCast(bool strict)
                 if (m_targets.getUnitTarget()->GetCharmerGUID())
                     return SPELL_FAILED_CHARMED;
 
-                if (int32(m_targets.getUnitTarget()->getLevel()) > CalculateDamage(i, m_targets.getUnitTarget()))
-                    return SPELL_FAILED_HIGHLEVEL;
+                /*if (int32(m_targets.getUnitTarget()->getLevel()) > m_caster->CalculateSpellDamage(m_targets.getUnitTarget(), m_spellInfo, i, &m_currentBasePoints[i]))
+                    return SPELL_FAILED_HIGHLEVEL;*/
 
                 break;
             }

@@ -1576,7 +1576,7 @@ void Spell::EffectDummy(uint32 i)
                     m_caster->CastCustomSpell(m_caster, 31818, &mana, NULL, NULL, true, NULL);
 
                     // Mana Feed
-                    int32 manaFeedVal = m_caster->CalculateSpellDamage(m_caster, m_spellInfo, 1, m_spellInfo->EffectBasePoints[1]);
+                    int32 manaFeedVal = m_caster->CalculateSpellDamage(m_caster, m_spellInfo, EFFECT_INDEX_1);
                     manaFeedVal = manaFeedVal * mana / 100;
                     if (manaFeedVal > 0)
                         m_caster->CastCustomSpell(m_caster, 32553, &manaFeedVal, NULL, NULL, true, NULL);
@@ -3781,7 +3781,7 @@ void Spell::EffectEnchantItemTmp(uint32 i)
     // Shaman Rockbiter Weapon
     if (i == 0 && m_spellInfo->Effect[1] == SPELL_EFFECT_DUMMY)
     {
-        int32 enchnting_damage = CalculateDamage(1, NULL);//+1;
+        int32 enchnting_damage = p_caster->CalculateSpellDamage(nullptr, m_spellInfo, 1, &m_currentBasePoints[1]);
 
         // enchanting id selected by calculated damage-per-sec stored in Effect[1] base value
         // with already applied percent bonus from Elemental Weapons talent
@@ -4203,7 +4203,7 @@ void Spell::EffectSummonCritter(uint32 i)
     critter->SetUInt32Value(UNIT_NPC_FLAGS, critter->GetCreatureTemplate()->npcflag);
 
     critter->AIM_Initialize();
-    critter->InitPetCreateSpells();                         // e.g. disgusting oozeling has a create spell as critter...
+    critter->InitPetCreateSpells(false); // e.g. disgusting oozeling has a create spell as critter...
     critter->SelectLevel(critter->GetCreatureTemplate());
 
     // set timer for unsummon
@@ -4446,14 +4446,14 @@ void Spell::EffectWeaponDmg(uint32 i)
         {
             case SPELL_EFFECT_WEAPON_DAMAGE:
             case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
-                fixed_bonus += CalculateDamage(j, unitTarget);
+                fixed_bonus += m_caster->CalculateSpellDamage(unitTarget, m_spellInfo, j, &m_currentBasePoints[j]);
                 break;
             case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
-                fixed_bonus += CalculateDamage(j, unitTarget);
+                fixed_bonus +=  m_caster->CalculateSpellDamage(unitTarget, m_spellInfo, j, &m_currentBasePoints[j]);
                 normalized = true;
                 break;
             case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
-                weaponDamagePercentMod *= float(CalculateDamage(j, unitTarget)) / 100.0f;
+                weaponDamagePercentMod *= float(m_caster->CalculateSpellDamage(unitTarget, m_spellInfo, j, &m_currentBasePoints[j])) / 100.0f;
 
                 // applied only to prev.effects fixed damage
                 if (customBonusDamagePercentMod)
@@ -5419,18 +5419,6 @@ void Spell::EffectDuel(uint32 i)
     if (targetAreaEntry && (targetAreaEntry->flags & AREA_FLAG_CAPITAL))
     {
         SendCastResult(SPELL_FAILED_NO_DUELING);            // Dueling isn't allowed here
-        return;
-    }
-
-    if (caster->GetAreaId() == 72)
-    {
-        SendCastResult(SPELL_FAILED_NO_DUELING);
-        return;
-    }
-
-    if (target->GetAreaId() == 72)
-    {
-        SendCastResult(SPELL_FAILED_NO_DUELING);
         return;
     }
 

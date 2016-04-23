@@ -1133,8 +1133,6 @@ bool Guardian::InitStatsForLevel(uint32 petlevel)
         createResistance[SPELL_SCHOOL_SHADOW] = cinfo->resistance5;
         createResistance[SPELL_SCHOOL_ARCANE] = cinfo->resistance6;
     }
-    for (uint8 i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
-        SetModifierValue(UnitMods(UNIT_MOD_RESISTANCE_START + i), BASE_VALUE, float(createResistance[i]));
 
     //health, mana, armor and resistance
     PetLevelInfo const* pInfo = sObjectMgr->GetPetLevelInfo(creature_ID, petlevel);
@@ -1152,10 +1150,6 @@ bool Guardian::InitStatsForLevel(uint32 petlevel)
     }
     else                                            // not exist in DB, use some default fake data
     {
-        // remove elite bonuses included in DB values
-        //SetCreateHealth(uint32(((float(cinfo->maxhealth) / cinfo->maxlevel) / (1 + 2 * cinfo->rank)) * petlevel));
-        //SetCreateMana(uint32(((float(cinfo->maxmana)   / cinfo->maxlevel) / (1 + 2 * cinfo->rank)) * petlevel));
-
         SetCreateStat(STAT_STRENGTH, 22);
         SetCreateStat(STAT_AGILITY, 22);
         SetCreateStat(STAT_STAMINA, 25);
@@ -1308,10 +1302,14 @@ bool Guardian::InitStatsForLevel(uint32 petlevel)
         }
     }
 
+    for (uint8 i = SPELL_SCHOOL_HOLY; i < MAX_SPELL_SCHOOL; ++i)
+        SetModifierValue(UnitMods(UNIT_MOD_RESISTANCE_START + i), BASE_VALUE, float(createResistance[i]));
+
     UpdateAllStats();
 
     SetHealth(GetMaxHealth());
     SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
+
     return true;
 }
 
@@ -1716,14 +1714,13 @@ void Pet::removeSpell(uint16 spell_id)
     RemoveAurasDueToSpell(spell_id);
 }
 
-void Pet::InitPetCreateSpells()
+void Pet::InitPetCreateSpells(bool instantMode)
 {
     m_charmInfo->InitPetActionBar();
     m_spells.clear();
 
     int32 usedtrainpoints = 0, petspellid;
-    PetCreateSpellEntry const* CreateSpells = sObjectMgr->GetPetCreateSpellEntry(GetEntry());
-    if (CreateSpells)
+    if (PetCreateSpellEntry const* CreateSpells = instantMode ? sObjectMgr->GetPetCreateSpellInstantEntry(GetEntry()) : sObjectMgr->GetPetCreateSpellEntry(GetEntry()))
     {
         Unit* owner = GetOwner();
         Player* p_owner = owner && owner->GetTypeId() == TYPEID_PLAYER ? owner->ToPlayer() : NULL;
